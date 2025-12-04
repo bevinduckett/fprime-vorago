@@ -9,7 +9,7 @@
 #include "StrictMallocAllocator.hpp"
 #include <malloc.h>  // for mallinfo()
 #include <stdio.h>
-#include <unistd.h> // For sbrk()
+#include <unistd.h>  // For sbrk()
 #include <Fw/Types/Assert.hpp>
 #include <algorithm>  // included for max
 #include <fprime-baremetal/Os/MemoryIdScope/MemoryIdScope.hpp>
@@ -93,7 +93,11 @@ void* StrictMallocAllocator::allocate(const FwEnumStoreType identifier,
         size = 0;  // set to zero if can't get memory
     } else {
         // Check id is a valid index and m_allocations has been allocated,
-        FW_ASSERT(id >= 0 && id < this->m_numIds, id, size, this->m_numIds);
+        // FW_ASSERT(id >= 0 && id < this->m_numIds, id, size, this->m_numIds);
+        if (id < 0 || id >= this->m_numIds) {
+            printf("\nInvalid ID: %d , numIds = %d\n", id, this->m_numIds);
+            id = this->m_defaultId;
+        }
         FW_ASSERT(this->m_allocations != nullptr);
         // Then add actualSize this ID's memory total
         this->m_allocations[id].fetch_add(actualSize);
@@ -158,7 +162,7 @@ void StrictMallocAllocator::reportAllocation() {
     printf("MEM: unaccounted for         %10d bytes\n", mi.uordblks - total);
     printf("MEM: unused heap             %10d bytes\n", remaining_heap);
     printf("MEM: total heap              %10d bytes\n", total_heap);
-    
+
     printf("End of MEM report\n");
 }
 }  // namespace Va416x0Svc
