@@ -21,16 +21,16 @@
 
 #include "IsrSafeQueue.hpp"
 #include <Fw/Types/Assert.hpp>
+#include <Fw/Types/ByteArray.hpp>
+#include <Fw/Types/MemAllocator.hpp>
+#include <Va416x0/Svc/StrictMallocAllocator/StrictMallocAllocator.hpp>
+#include <cstdio>
 #include <cstring>
+#include <fprime-baremetal/Os/MemoryIdScope/MemoryIdScope.hpp>
 #include <new>
 #include "Os/Delegate.hpp"
 #include "Os/Queue.hpp"
 #include "Va416x0/Mmio/Lock/Lock.hpp"
-#include <Fw/Types/MemAllocator.hpp>
-#include <Fw/Types/ByteArray.hpp>
-#include <Va416x0/Svc/StrictMallocAllocator/StrictMallocAllocator.hpp>
-#include <fprime-baremetal/Os/MemoryIdScope/MemoryIdScope.hpp>
-#include <cstdio>
 
 namespace Va416x0Os {
 namespace IsrSafeQueue {
@@ -102,7 +102,7 @@ Os::QueueInterface::Status IsrSafeQueue::create(FwEnumStoreType id,
 
     FwSizeType expSize = Types::MaxHeap::ELEMENT_SIZE * depth;
     FwSizeType size = expSize;
-    void* memory = allocator.allocate(id, size,  Types::MaxHeap::ALIGNMENT);
+    void* memory = allocator.allocate(id, size, Types::MaxHeap::ALIGNMENT);
 
     if (nullptr == memory || size != expSize) {
         delete[] indices;
@@ -110,7 +110,7 @@ Os::QueueInterface::Status IsrSafeQueue::create(FwEnumStoreType id,
         delete[] data;
         return QueueInterface::Status::ALLOCATION_FAILED;
     }
-    this->m_handle.m_heap.create(depth,  Fw::ByteArray(static_cast<U8*>(memory), size));
+    this->m_handle.m_heap.create(depth, Fw::ByteArray(static_cast<U8*>(memory), size));
 
     // Assign initial indices and sizes
     for (FwSizeType i = 0; i < depth; i++) {
