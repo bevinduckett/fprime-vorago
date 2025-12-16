@@ -21,11 +21,16 @@
 
 #include "Va416x0/Drv/AdcSampler/AdcSampler.hpp"
 #include "Va416x0/Mmio/Adc/Adc.hpp"
+#include "Va416x0/Mmio/Amba/Amba.hpp"
+#include "Va416x0/Mmio/ClkTree/ClkTree.hpp"
 #include "Va416x0/Mmio/Gpio/Pin.hpp"
 #include "Va416x0/Mmio/Gpio/Port.hpp"
+#include "Va416x0/Mmio/IrqRouter/IrqRouter.hpp"
 #include "Va416x0/Mmio/Lock/Lock.hpp"
 #include "Va416x0/Mmio/Nvic/Nvic.hpp"
 #include "Va416x0/Mmio/SysConfig/SysConfig.hpp"
+#include "lib/fprime/Os/RawTime.hpp"
+
 namespace Va416x0 {
 
 /* Each AdcRequest (U32 value) is a bit packed structure with the following fields:
@@ -61,6 +66,8 @@ static inline U32 REQ_GET_IS_SWEEP(U32 request) {
     return ((request) & 0x1);
 }
 
+constexpr U32 MICROSECONDS_PER_SECOND = 1000 * 1000;
+
 // ----------------------------------------------------------------------
 // Component construction and destruction
 // ----------------------------------------------------------------------
@@ -71,17 +78,38 @@ AdcSampler ::AdcSampler(const char* const compName) : AdcSamplerComponentBase(co
     this->m_curRequest = 0;
     this->m_numReads = 0;
     this->m_requestIdx.store(0);
+    this->m_adcDelayTicks = 0;
 }
 
-void AdcSampler ::setup(AdcConfig& config, U32 interrupt_priority) {
+void AdcSampler ::setup(AdcConfig& config,
+                        U32 interrupt_priority,
+                        U32 adc_delay_microseconds,
+                        U8 timer_peripheral_index) {
+    this->m_timerIdx = timer_peripheral_index;
+    Va416x0Mmio::Timer timer(this->m_timerIdx);
+    Va416x0Mmio::SysConfig::set_clk_enabled(timer, true);
+    Va416x0Mmio::SysConfig::reset_peripheral(timer);
+    // Convert microseconds to ticks
+    U32 timer_freq = Va416x0Mmio::ClkTree::getActiveTimerFreq(timer);
+    U64 rstValueScaled = U64(timer_freq) * adc_delay_microseconds;
+
+    this->m_adcDelayTicks = rstValueScaled / MICROSECONDS_PER_SECOND;
+    timer.write_csd_ctrl(0);
+    Va416x0Mmio::Nvic::InterruptControl interrupt =
+        Va416x0Mmio::Nvic::InterruptControl(timer.get_timer_done_exception());
+    interrupt.set_interrupt_pending(false);
+    interrupt.set_interrupt_priority(interrupt_priority);
+    Va416x0Mmio::SysConfig::set_clk_enabled(Va416x0Mmio::SysConfig::IRQ_ROUTER, true);
+    Va416x0Mmio::Amba::memory_barrier();
+    Va416x0Mmio::IrqRouter::write_adcsel(timer_peripheral_index);
+
     // Enable CLK for ADC
     Va416x0Mmio::SysConfig::reset_peripheral(
         Va416x0Mmio::SysConfig::ADC);  // not technically needed, but not a problem to do
     Va416x0Mmio::SysConfig::set_clk_enabled(Va416x0Mmio::SysConfig::ADC, true);
 
     // setup interrupt (I could make interrupt static, but I don't see a reason too yet)
-    Va416x0Mmio::Nvic::InterruptControl interrupt =
-        Va416x0Mmio::Nvic::InterruptControl(Va416x0Types::ExceptionNumber::INTERRUPT_ADC);
+    interrupt = Va416x0Mmio::Nvic::InterruptControl(Va416x0Types::ExceptionNumber::INTERRUPT_ADC);
     interrupt.set_interrupt_pending(false);
     interrupt.set_interrupt_enabled(true);
     interrupt.set_interrupt_priority(interrupt_priority);
@@ -263,10 +291,16 @@ void AdcSampler ::startReadInner() {
          Va416x0Mmio::Adc::CTRL_CHAN_TAG_DIS +
          ((REQ_GET_IS_SWEEP(this->m_curRequest) == 1) ? Va416x0Mmio::Adc::CTRL_SWEEP_EN
                                                       : Va416x0Mmio::Adc::CTRL_SWEEP_DIS) +
-         Va416x0Mmio::Adc::CTRL_MANUAL_TRIG);
+         Va416x0Mmio::Adc::CTRL_EXT_TRIG_EN);
 
     // Write control register
     Va416x0Mmio::Adc::write_ctrl(ctrl_val);
+
+    // Setup and start timer
+    Va416x0Mmio::Timer timer(this->m_timerIdx);
+    timer.write_cnt_value(this->m_adcDelayTicks);
+    timer.write_ctrl(Va416x0Mmio::Timer::CTRL_ENABLE | Va416x0Mmio::Timer::CTRL_AUTO_DISABLE |
+                     Va416x0Mmio::Timer::CTRL_IRQ_ENB | Va416x0Mmio::Timer::CTRL_STATUS_PULSE);
 }
 
 U32 AdcSampler::calculateGpioPinsValue(U32 request, U32 port_number) {
